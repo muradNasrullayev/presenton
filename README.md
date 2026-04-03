@@ -224,6 +224,9 @@ You can also set the following environment variables to customize the image gene
 - PEXELS_API_KEY=[Your Pexels API Key]: Required if using **pexels** as the image provider.
 - PIXABAY_API_KEY=[Your Pixabay API Key]: Required if using **pixabay** as the image provider.
 - COMFYUI_URL=[Your ComfyUI server URL] and COMFYUI_WORKFLOW=[Workflow JSON]: Required if using **comfyui** to route prompts to a self-hosted ComfyUI workflow.
+- SLIDE_GENERATION_BATCH_SIZE=[integer]: Limits how many slides are generated concurrently per batch. Lower this on small servers if large presentations crash. Default: `5`.
+- ASSET_GENERATION_CONCURRENCY=[integer]: Limits concurrent image-generation jobs. Lower this if large presentations cause memory spikes or provider timeouts. Default: `3`.
+- DOWNLOAD_CONCURRENCY=[integer]: Limits concurrent remote asset downloads during export. Default: `3`.
 
 You can disable anonymous telemetry using the following environment variable:
 

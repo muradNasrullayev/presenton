@@ -19,6 +19,7 @@ const canChangeKeys = process.env.CAN_CHANGE_KEYS !== "false";
 const fastapiPort = 8000;
 const nextjsPort = 3000;
 const appmcpPort = 8001;
+const shouldStartOllama = process.env.LLM === "ollama";
 
 const userConfigPath = join(process.env.APP_DATA_DIRECTORY, "userConfig.json");
 const userDataDir = dirname(userConfigPath);
@@ -170,21 +171,28 @@ const startServers = async () => {
     console.error("Next.js process failed to start:", err);
   });
 
-  const ollamaProcess = spawn("ollama", ["serve"], {
-    cwd: "/",
-    stdio: "inherit",
-    env: process.env,
-  });
+  let ollamaProcess = null;
+  if (shouldStartOllama) {
+    ollamaProcess = spawn("ollama", ["serve"], {
+      cwd: "/",
+      stdio: "inherit",
+      env: process.env,
+    });
 
-  ollamaProcess.on("error", (err) => {
-    console.error("Ollama process failed to start:", err);
-  });
+    ollamaProcess.on("error", (err) => {
+      console.error("Ollama process failed to start:", err);
+    });
+  } else {
+    console.log("Skipping Ollama startup because LLM is not set to ollama");
+  }
 
   // Keep the Node process alive until both servers exit
   const exitCode = await Promise.race([
     new Promise((resolve) => fastApiProcess.on("exit", resolve)),
     new Promise((resolve) => nextjsProcess.on("exit", resolve)),
-    new Promise((resolve) => ollamaProcess.on("exit", resolve)),
+    ...(ollamaProcess
+      ? [new Promise((resolve) => ollamaProcess.on("exit", resolve))]
+      : []),
   ]);
 
   console.log(`One of the processes exited. Exit code: ${exitCode}`);

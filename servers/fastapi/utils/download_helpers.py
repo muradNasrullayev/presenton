@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 import uuid
+from utils.get_env import get_download_concurrency_env
 
 
 async def download_file(
@@ -62,7 +63,13 @@ async def download_files(
     urls: List[str], save_directory: str, headers: Optional[dict] = None
 ) -> List[Optional[str]]:
     print(f"Starting download of {len(urls)} files to {save_directory}")
-    coroutines = [download_file(url, save_directory, headers) for url in urls]
+    semaphore = asyncio.Semaphore(get_download_concurrency_env())
+
+    async def download_with_limit(url: str) -> Optional[str]:
+        async with semaphore:
+            return await download_file(url, save_directory, headers)
+
+    coroutines = [download_with_limit(url) for url in urls]
     results = await asyncio.gather(*coroutines, return_exceptions=True)
     final_results = []
     for i, result in enumerate(results):

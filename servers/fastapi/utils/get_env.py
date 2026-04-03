@@ -1,6 +1,16 @@
 import os
 
 
+def _get_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def get_can_change_keys_env():
     return os.getenv("CAN_CHANGE_KEYS")
 
@@ -142,3 +152,15 @@ def get_codex_model_env():
 
 def get_migrate_database_on_startup_env():
     return os.getenv("MIGRATE_DATABASE_ON_STARTUP")
+
+
+def get_slide_generation_batch_size_env():
+    return max(1, _get_int_env("SLIDE_GENERATION_BATCH_SIZE", 5))
+
+
+def get_asset_generation_concurrency_env():
+    return max(1, _get_int_env("ASSET_GENERATION_CONCURRENCY", 3))
+
+
+def get_download_concurrency_env():
+    return max(1, _get_int_env("DOWNLOAD_CONCURRENCY", 3))

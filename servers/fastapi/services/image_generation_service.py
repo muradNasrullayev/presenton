@@ -16,6 +16,7 @@ from utils.get_env import (
 from utils.get_env import get_pixabay_api_key_env
 from utils.get_env import get_comfyui_url_env
 from utils.get_env import get_comfyui_workflow_env
+from utils.get_env import get_asset_generation_concurrency_env
 from utils.image_provider import (
     is_gpt_image_1_5_selected,
     is_image_generation_disabled,
@@ -34,6 +35,9 @@ class ImageGenerationService:
         self.output_directory = output_directory
         self.is_image_generation_disabled = is_image_generation_disabled()
         self.image_gen_func = self.get_image_gen_func()
+        self._generation_semaphore = asyncio.Semaphore(
+            get_asset_generation_concurrency_env()
+        )
 
     def get_image_gen_func(self):
         if self.is_image_generation_disabled:
@@ -80,25 +84,26 @@ class ImageGenerationService:
         print(f"Request - Generating Image for {image_prompt}")
 
         try:
-            if self.is_stock_provider_selected():
-                image_path = await self.image_gen_func(image_prompt)
-            else:
-                image_path = await self.image_gen_func(
-                    image_prompt, self.output_directory
-                )
-            if image_path:
-                if image_path.startswith("http"):
-                    return image_path
-                elif os.path.exists(image_path):
-                    return ImageAsset(
-                        path=image_path,
-                        is_uploaded=False,
-                        extras={
-                            "prompt": prompt.prompt,
-                            "theme_prompt": prompt.theme_prompt,
-                        },
+            async with self._generation_semaphore:
+                if self.is_stock_provider_selected():
+                    image_path = await self.image_gen_func(image_prompt)
+                else:
+                    image_path = await self.image_gen_func(
+                        image_prompt, self.output_directory
                     )
-            raise Exception(f"Image not found at {image_path}")
+                if image_path:
+                    if image_path.startswith("http"):
+                        return image_path
+                    elif os.path.exists(image_path):
+                        return ImageAsset(
+                            path=image_path,
+                            is_uploaded=False,
+                            extras={
+                                "prompt": prompt.prompt,
+                                "theme_prompt": prompt.theme_prompt,
+                            },
+                        )
+                raise Exception(f"Image not found at {image_path}")
 
         except Exception as e:
             print(f"Error generating image: {e}")

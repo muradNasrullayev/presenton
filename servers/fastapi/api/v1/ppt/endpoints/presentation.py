@@ -35,6 +35,10 @@ from models.sql.template import TemplateModel
 from services.documents_loader import DocumentsLoader
 from services.webhook_service import WebhookService
 from utils.get_layout_by_name import get_layout_by_name
+from utils.get_env import (
+    get_asset_generation_concurrency_env,
+    get_slide_generation_batch_size_env,
+)
 from services.image_generation_service import ImageGenerationService
 from utils.dict_utils import deep_update
 from utils.export_utils import export_presentation
@@ -679,7 +683,7 @@ async def generate_presentation_handler(
             await sql_session.commit()
 
         image_generation_service = ImageGenerationService(get_images_directory())
-        async_assets_generation_tasks = []
+        generated_assets = []
 
         # 7. Generate slide content concurrently (batched), then build slides and fetch assets
         slides: List[SlideModel] = []
@@ -687,8 +691,9 @@ async def generate_presentation_handler(
         slide_layout_indices = presentation_structure.slides
         slide_layouts = [layout_model.slides[idx] for idx in slide_layout_indices]
 
-        # Schedule slide content generation and asset fetching in batches of 10
-        batch_size = 10
+        # Limit generation pressure so large presentations don't exhaust container memory.
+        batch_size = get_slide_generation_batch_size_env()
+        asset_batch_size = get_asset_generation_concurrency_env()
         for start in range(0, len(slide_layouts), batch_size):
             end = min(start + batch_size, len(slide_layouts))
 
@@ -724,24 +729,22 @@ async def generate_presentation_handler(
                 slides.append(slide)
                 batch_slides.append(slide)
 
-            # Start asset fetch tasks immediately so they run in parallel with next batch's LLM calls
-            asset_tasks = [
-                asyncio.create_task(process_slide_and_fetch_assets(image_generation_service, slide))
-                for slide in batch_slides
-            ]
-            async_assets_generation_tasks.extend(asset_tasks)
+            # Fetch assets in smaller batches to avoid large memory and network spikes.
+            for asset_start in range(0, len(batch_slides), asset_batch_size):
+                asset_end = min(asset_start + asset_batch_size, len(batch_slides))
+                asset_tasks = [
+                    process_slide_and_fetch_assets(image_generation_service, slide)
+                    for slide in batch_slides[asset_start:asset_end]
+                ]
+                generated_assets_list = await asyncio.gather(*asset_tasks)
+                for assets_list in generated_assets_list:
+                    generated_assets.extend(assets_list)
 
         if async_status:
             async_status.message = "Fetching assets for slides"
             async_status.updated_at = datetime.now()
             sql_session.add(async_status)
             await sql_session.commit()
-
-        # Run all asset tasks concurrently while batches may still be generating content
-        generated_assets_list = await asyncio.gather(*async_assets_generation_tasks)
-        generated_assets = []
-        for assets_list in generated_assets_list:
-            generated_assets.extend(assets_list)
 
         # 8. Save PresentationModel and Slides
         sql_session.add(presentation)
