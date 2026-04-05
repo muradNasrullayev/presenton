@@ -77,6 +77,10 @@ import uuid
 PRESENTATION_ROUTER = APIRouter(prefix="/presentation", tags=["Presentation"])
 
 
+def _build_public_export_url(export_path: str) -> str:
+    return f"/app_data/exports/{os.path.basename(export_path)}"
+
+
 @PRESENTATION_ROUTER.get("/all", response_model=List[PresentationWithSlides])
 async def get_all_presentations(sql_session: AsyncSession = Depends(get_async_session)):
     presentations_with_slides = []
@@ -879,6 +883,96 @@ async def generate_presentation_pptx_from_prompt(
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         filename=download_name,
     )
+
+
+@PRESENTATION_ROUTER.post(
+    "/generate/prompt-to-pptx/async",
+    response_model=AsyncPresentationGenerationTaskModel,
+)
+async def generate_presentation_pptx_from_prompt_async(
+    request: PromptToPptxRequest,
+    background_tasks: BackgroundTasks,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    generation_request = GeneratePresentationRequest(
+        content=request.prompt,
+        instructions=request.instructions,
+        tone=request.tone,
+        verbosity=request.verbosity,
+        web_search=request.web_search,
+        n_slides=15,
+        language="Azerbaijani",
+        template=request.template,
+        include_table_of_contents=False,
+        include_title_slide=True,
+        files=None,
+        export_as="pptx",
+        trigger_webhook=False,
+    )
+
+    async def _run_generation_task(
+        gen_request: GeneratePresentationRequest,
+        async_status: AsyncPresentationGenerationTaskModel,
+        output_filename: Optional[str],
+    ):
+        try:
+            (presentation_id,) = await check_if_api_request_is_valid(
+                gen_request, sql_session
+            )
+            response = await generate_presentation_handler(
+                gen_request, presentation_id, async_status, sql_session
+            )
+
+            download_name = sanitize_filename(
+                output_filename or os.path.splitext(os.path.basename(response.path))[0]
+            )
+            if not download_name:
+                download_name = str(uuid.uuid4())
+            if not download_name.lower().endswith(".pptx"):
+                download_name = f"{download_name}.pptx"
+
+            public_download_url = _build_public_export_url(response.path)
+            async_status.status = "completed"
+            async_status.message = "Presentation is ready to download"
+            async_status.updated_at = datetime.now()
+            async_status.data = {
+                **(async_status.data or {}),
+                "presentation_id": str(response.presentation_id),
+                "download_url": public_download_url,
+                "download_filename": download_name,
+                "path": response.path,
+                "edit_path": response.edit_path,
+            }
+            sql_session.add(async_status)
+            await sql_session.commit()
+        except Exception as e:
+            if not isinstance(e, HTTPException):
+                traceback.print_exc()
+                e = HTTPException(status_code=500, detail="Presentation generation failed")
+
+            async_status.status = "error"
+            async_status.message = "Presentation generation failed"
+            async_status.updated_at = datetime.now()
+            async_status.error = APIErrorModel.from_exception(e).model_dump(mode="json")
+            sql_session.add(async_status)
+            await sql_session.commit()
+
+    async_status = AsyncPresentationGenerationTaskModel(
+        status="pending",
+        message="Queued for PPTX generation",
+        data=None,
+    )
+    sql_session.add(async_status)
+    await sql_session.commit()
+
+    background_tasks.add_task(
+        _run_generation_task,
+        generation_request,
+        async_status,
+        request.filename,
+    )
+
+    return async_status
 
 
 @PRESENTATION_ROUTER.post(
