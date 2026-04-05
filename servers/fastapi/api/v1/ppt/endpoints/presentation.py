@@ -8,7 +8,8 @@ import traceback
 from typing import Annotated, List, Literal, Optional, Tuple
 import dirtyjson
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Path, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from pathvalidate import sanitize_filename
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
@@ -16,6 +17,7 @@ from constants.presentation import DEFAULT_TEMPLATES
 from enums.webhook_event import WebhookEvent
 from models.api_error_model import APIErrorModel
 from models.generate_presentation_request import GeneratePresentationRequest
+from models.prompt_to_pptx_request import PromptToPptxRequest
 from models.presentation_and_path import PresentationPathAndEditPath
 from models.presentation_from_template import EditPresentationRequest
 from models.presentation_outline_model import (
@@ -825,6 +827,58 @@ async def generate_presentation_sync(
     except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Presentation generation failed")
+
+
+@PRESENTATION_ROUTER.post("/generate/prompt-to-pptx")
+async def generate_presentation_pptx_from_prompt(
+    request: PromptToPptxRequest,
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    generation_request = GeneratePresentationRequest(
+        content=request.prompt,
+        instructions=request.instructions,
+        tone=request.tone,
+        verbosity=request.verbosity,
+        web_search=request.web_search,
+        n_slides=15,
+        language="Azerbaijani",
+        template=request.template,
+        include_table_of_contents=False,
+        include_title_slide=True,
+        files=None,
+        export_as="pptx",
+        trigger_webhook=False,
+    )
+
+    try:
+        (presentation_id,) = await check_if_api_request_is_valid(
+            generation_request, sql_session
+        )
+        response = await generate_presentation_handler(
+            generation_request, presentation_id, None, sql_session
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Presentation generation failed")
+
+    if not os.path.exists(response.path):
+        raise HTTPException(status_code=500, detail="Generated PPTX file not found")
+
+    download_name = sanitize_filename(
+        request.filename or os.path.splitext(os.path.basename(response.path))[0]
+    )
+    if not download_name:
+        download_name = str(uuid.uuid4())
+    if not download_name.lower().endswith(".pptx"):
+        download_name = f"{download_name}.pptx"
+
+    return FileResponse(
+        path=response.path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=download_name,
+    )
 
 
 @PRESENTATION_ROUTER.post(
